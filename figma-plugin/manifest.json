@@ -1,0 +1,13 @@
+{
+  "name": "Figma MCP Selection Bridge",
+  "id": "figma-mcp-selection-bridge",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "permissions": ["currentuser"],
+  "networkAccess": {
+    "allowedDomains": ["http://localhost:3050"],
+    "reasoning": "Push selection context to the local Figma MCP Bridge (VS Code extension)"
+  }
+}

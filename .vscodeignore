@@ -1,0 +1,15 @@
+# Source (compiled output in dist/ is included)
+src/**
+
+# Dev/build tools
+.vscode/**
+figma-plugin/**
+
+# Config & meta
+tsconfig.json
+.env
+.env.example
+.gitignore
+.vscodeignore
+*.md
+*.log

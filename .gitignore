@@ -1,0 +1,45 @@
+# ── Dependencies ────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Build output ─────────────────────────────────────────────────────────────
+dist/
+
+# ── Packaged extension (build artifacts — install from source instead) ───────
+*.vsix
+*.tgz
+
+# ── Environment secrets ──────────────────────────────────────────────────────
+.env
+# .env.example is intentionally tracked (it's a safe template)
+
+# ── Generated HTML output from buildWebpage command ──────────────────────────
+figma-*.html
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Editor ───────────────────────────────────────────────────────────────────
+.idea/
+.vscode/settings.json
+.vscode/*.code-workspace
+# launch.json and mcp.json are intentionally tracked
+
+# ── Test coverage ─────────────────────────────────────────────────────────────
+coverage/
+
+# ── Temp / scratch ────────────────────────────────────────────────────────────
+tmp/
+*.tmp
+*.bak
