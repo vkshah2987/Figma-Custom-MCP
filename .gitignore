@@ -4,16 +4,14 @@ node_modules/
 # ── Build output ─────────────────────────────────────────────────────────────
 dist/
 
-# ── Packaged extension (build artifacts — install from source instead) ───────
-*.vsix
+# ── Package artifacts ─────────────────────────────────────────────────────────
 *.tgz
 
 # ── Environment secrets ──────────────────────────────────────────────────────
 .env
 # .env.example is intentionally tracked (it's a safe template)
 
-# ── Generated HTML output from buildWebpage command ──────────────────────────
-figma-*.html
+# ── Generated output ──────────────────────────────────────────────────────────
 
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store

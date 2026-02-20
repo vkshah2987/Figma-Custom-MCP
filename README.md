@@ -1,6 +1,6 @@
 # Figma MCP Bridge
 
-> A VS Code extension that connects the **Figma** design tool directly to **GitHub Copilot** — select any node in Figma and instantly generate a webpage, interrogate design data, or feed real design context into your AI workflow.
+> A standalone **MCP server** that connects the Figma desktop plugin to any AI client — VS Code Copilot, Claude Desktop, Cursor, or any MCP-compatible tool. Select a node in Figma, and your AI can see the full design tree.
 
 ## How It Works
 
@@ -8,47 +8,76 @@
 Figma Desktop Plugin
         │  POST /selection  (node metadata + design tree)
         ▼
-Express Bridge  localhost:3050
+Express Bridge  127.0.0.1:3050  ◄── HTTP receiver
         │
    SelectionStore  (in-memory)
         │
-   LM Tool: get_current_figma_selection
+MCP Server  (stdio)  ◄── tools + resources
         │
-   GitHub Copilot Chat  ◄──  you ask "Build a webpage from my selection"
-        │
-   buildWebpage command  →  figma-<name>.html
+Any MCP Client  (VS Code Copilot · Claude Desktop · Cursor · …)
 ```
+
+The server runs **two transports in one process**:
+
+1. **Express HTTP** on port 3050 — receives design-tree pushes from the Figma plugin
+2. **MCP stdio** — exposes tools and resources to any MCP-compatible AI client
 
 ## Features
 
-- **Auto-start bridge** — Express server on `localhost:3050` starts when VS Code opens
+- **Client-agnostic** — works with VS Code Copilot, Claude Desktop, Cursor, or any MCP client
 - **Design tree extraction** — full recursive node tree (fills, strokes, typography, effects, auto-layout)
-- **Build Webpage** — one command turns your Figma selection into a ready-to-open `.html` file
-- **LM Tool** — `get_current_figma_selection` exposes live design data to any Copilot Chat request
-- **Status bar** — shows bridge state and selected node name; click to trigger Build Webpage
+- **MCP Tools** — `get_current_figma_selection`, `clear_figma_selection`, `get_bridge_health`
+- **MCP Resource** — `figma://selection` returns the current design tree as JSON
 - **Zero config** — no API keys, no OAuth, no Docker
 
 ## Prerequisites
 
 | Requirement | Version |
 |---|---|
-| VS Code | ≥ 1.109 |
-| GitHub Copilot extension | latest |
+| Node.js | ≥ 20 |
 | Figma Desktop | any recent |
-| Node.js (dev only) | ≥ 20 |
+| An MCP client | VS Code Copilot, Claude Desktop, Cursor, etc. |
 
 ## Installation
 
-### 1 — VS Code Extension
+### 1 — Clone and build
 
 ```bash
-# Install the packaged extension
-code --install-extension figma-mcp-bridge-1.3.0.vsix
+git clone <repo-url> && cd figma-mcp-bridge
+npm install
+npm run build
 ```
 
-Or via the Extensions side-bar: **Install from VSIX…** → select the file.
+### 2 — Register in your MCP client
 
-### 2 — Figma Plugin
+**VS Code** — add to `.vscode/mcp.json` (already included in this repo):
+
+```jsonc
+{
+  "servers": {
+    "figma-mcp-bridge": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["<path-to-repo>/dist/index.js"]
+    }
+  }
+}
+```
+
+**Claude Desktop** — add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "figma-mcp-bridge": {
+      "command": "node",
+      "args": ["<path-to-repo>/dist/index.js"]
+    }
+  }
+}
+```
+
+### 3 — Figma Plugin
 
 1. Open **Figma Desktop**.
 2. Go to **Menu → Plugins → Development → Import plugin from manifest…**
@@ -57,95 +86,89 @@ Or via the Extensions side-bar: **Install from VSIX…** → select the file.
 
 ## Usage
 
-### Generate a Webpage
-
 1. In Figma, select any frame or component and run the plugin.
-2. The plugin displays the selected node name — the bridge is now live.
-3. In VS Code, open **GitHub Copilot Chat** and run:
+2. The plugin posts the full design tree to `localhost:3050`.
+3. In your MCP client, the AI can now call `get_current_figma_selection` — either automatically or via your prompt.
 
-```
-@workspace /figmaMcp.buildWebpage
-```
-
-Or press the status-bar item at the bottom of VS Code.
-
-A `figma-<NodeName>.html` file will be created and opened. A prompt to preview it in the Simple Browser will appear.
-
-### Use Live Design Data in Copilot Chat
-
-In Copilot Chat, Copilot will automatically call `get_current_figma_selection` when you ask design-related questions:
+### Example prompts
 
 ```
 What node do I have selected in Figma right now?
 Describe the typography and color scheme of my current Figma selection.
 Generate a React component that matches my Figma selection.
+Build a landing page HTML from the Figma selection.
 ```
 
-## Commands
+## MCP Tools
 
-| Command | ID | Description |
-|---|---|---|
-| Build Webpage from Selection | `figmaMcp.buildWebpage` | Generate HTML from current Figma selection |
-| Clear Figma Selection | `figmaMcp.clearSelection` | Remove stored selection from bridge |
-| Start Bridge Server | `figmaMcp.startBridge` | Manually (re)start the Express bridge |
+| Tool | Description |
+|---|---|
+| `get_current_figma_selection` | Returns the full design tree and metadata for the currently selected Figma node |
+| `clear_figma_selection` | Clears the stored selection from the bridge |
+| `get_bridge_health` | Returns bridge status and port |
+
+## MCP Resources
+
+| URI | Description |
+|---|---|
+| `figma://selection` | The current Figma selection as JSON |
 
 ## Project Structure
 
 ```
 .
 ├── src/
-│   ├── extension.ts             # Extension entry point
+│   ├── index.ts                 # MCP server entry point (stdio + bridge)
 │   ├── bridge/
-│   │   └── server.ts            # Express bridge (port 3050)
-│   ├── commands/
-│   │   └── buildWebpage.ts      # LM-powered webpage generation
-│   ├── tools/
-│   │   └── selectionTool.ts     # get_current_figma_selection LM tool
+│   │   └── server.ts            # Express HTTP bridge (port 3050)
+│   ├── store/
+│   │   └── selectionStore.ts    # In-memory selection store
 │   └── types/
 │       └── selection.ts         # DesignNode + SelectionPayload types
 ├── figma-plugin/
 │   ├── manifest.json            # Figma plugin manifest
 │   ├── code.js                  # Plugin sandbox (ES5-safe)
 │   └── ui.html                  # Plugin UI + bridge POST
-├── dist/                        # Compiled extension (gitignored)
+├── .vscode/
+│   ├── mcp.json                 # MCP server registration for VS Code
+│   └── launch.json              # Debug config
+├── dist/                        # Compiled output (gitignored)
 ├── package.json
 └── README.md
 ```
 
-## Bridge API
+## Bridge HTTP API
+
+The Express bridge runs alongside the MCP server for receiving Figma plugin pushes:
 
 | Method | Path | Body / Response |
 |---|---|---|
 | `POST` | `/selection` | `SelectionPayload` JSON |
-| `GET` | `/selection` | Current `SelectionPayload` or `204` |
+| `GET` | `/selection` | Current `SelectionPayload` or `404` |
 | `DELETE` | `/selection` | Clears stored selection |
-| `GET` | `/health` | `{ status: "ok" }` |
+| `GET` | `/health` | `{ status: "healthy" }` |
 
 ```bash
 # Check what's selected
-curl http://localhost:3050/selection
+curl http://127.0.0.1:3050/selection
 
 # Health check
-curl http://localhost:3050/health
+curl http://127.0.0.1:3050/health
 
 # Clear selection
-curl -X DELETE http://localhost:3050/selection
+curl -X DELETE http://127.0.0.1:3050/selection
 ```
 
 ## Development
 
 ```bash
 npm install          # install dependencies
-npm run compile      # one-off TypeScript build
+npm run build        # one-off TypeScript build
 npm run watch        # watch mode
-npm run package      # produce .vsix (bundles node_modules)
+npm start            # run the MCP server
 ```
 
-Press **F5** in VS Code to launch the Extension Development Host.
-
 ## Environment Variables
-
-No required environment variables. Optional:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -155,10 +178,10 @@ No required environment variables. Optional:
 
 | Symptom | Fix |
 |---|---|
-| Status bar shows "Bridge: stopped" | Run **Start Bridge Server** command or reload VS Code window |
-| "No Figma selection" in Copilot | Open the Figma plugin and select a node |
+| MCP client says "server not found" | Check the `command` and `args` path in your MCP config |
+| Port 3050 already in use | Set `BRIDGE_PORT` env var to a different port, and update the Figma plugin URL |
+| "No Figma selection available" | Run the Figma plugin and select a node |
 | Plugin shows error on load | Ensure you imported via **manifest.json**, not a zip |
-| Generated HTML is unstyled | Selection may lack fill/stroke data — select a fully styled frame |
 
 ## License
 

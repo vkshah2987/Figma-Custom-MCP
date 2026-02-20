@@ -2,18 +2,14 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Figma MCP Extension",
-      "type": "extensionHost",
+      "name": "Run MCP Server",
+      "type": "node",
       "request": "launch",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}"
-      ],
-      "outFiles": [
-        "${workspaceFolder}/dist/**/*.js"
-      ],
+      "program": "${workspaceFolder}/dist/index.js",
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
       "preLaunchTask": "npm: build",
       "sourceMaps": true,
-      "trace": false
+      "console": "integratedTerminal"
     }
   ]
 }

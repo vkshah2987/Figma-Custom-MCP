@@ -3,27 +3,31 @@ import * as http from 'http';
 import { selectionStore } from '../store/selectionStore';
 import { SelectionPayload } from '../types/selection';
 
-const PORT = 3050;
-const HOST = 'localhost'; // match what the Figma plugin fetches
+const PORT = parseInt(process.env.BRIDGE_PORT || '3050', 10);
+const HOST = '0.0.0.0'; // bind all interfaces — handles both 127.0.0.1 and ::1 (IPv6 localhost)
 
 let httpServer: http.Server | undefined;
 let bridgeStatus: 'stopped' | 'running' | 'error' = 'stopped';
-let onStatusChange: ((s: typeof bridgeStatus) => void) | undefined;
 
 export function getBridgeStatus(): typeof bridgeStatus { return bridgeStatus; }
-export function onBridgeStatusChange(cb: (s: typeof bridgeStatus) => void): void { onStatusChange = cb; }
 
 function createApp(): express.Application {
   const app = express();
 
-  // Parse JSON bodies
-  app.use(express.json());
+  // Parse JSON bodies — 10 MB limit to handle large Figma design trees
+  app.use(express.json({ limit: '10mb' }));
 
-  // CORS — Figma plugin UI iframe needs these headers to make fetch() calls
+  // CORS — Figma plugin UI iframe sends Origin: null (sandboxed context).
+  // Reflecting the origin header back (instead of using '*') is the only way
+  // to satisfy browsers when origin is 'null'.
   app.use((_req: Request, res: Response, next: NextFunction) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = _req.headers.origin ?? '*';
+    res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (origin !== '*') {
+      res.setHeader('Vary', 'Origin');
+    }
     next();
   });
 
@@ -35,7 +39,9 @@ function createApp(): express.Application {
   // ── POST /selection ─────────────────────────────────────────────────────────
   // Figma plugin pushes the selected node here.
   app.post('/selection', (req: Request, res: Response): void => {
-    const { fileId, nodeId, pageId, userId, metadata, designTree } = req.body as Partial<SelectionPayload>;
+    // req.body is undefined when Content-Type is missing or body parsing failed
+    const body = (req.body || {}) as Partial<SelectionPayload>;
+    const { fileId, nodeId, pageId, userId, metadata, designTree } = body;
 
     if (!fileId || !nodeId || !metadata) {
       res.status(400).json({
@@ -87,9 +93,17 @@ function createApp(): express.Application {
 
   // ── Error handler ────────────────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction): void => {
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction): void => {
     console.error('[Figma Bridge] Unhandled error:', err.message);
-    res.status(500).json({ error: 'Internal server error' });
+    // Propagate the correct status code:
+    //   PayloadTooLargeError (body > limit) → 413
+    //   SyntaxError (malformed JSON)        → 400
+    //   everything else                     → 500
+    const status: number =
+      err.status ?? err.statusCode ??
+      (err.type === 'entity.too.large' ? 413 :
+       err instanceof SyntaxError     ? 400 : 500);
+    res.status(status).json({ error: err.message || 'Internal server error' });
   });
 
   return app;
@@ -97,11 +111,11 @@ function createApp(): express.Application {
 
 /**
  * Start the HTTP bridge.
- * Called from extension.ts activate().
+ * Called from index.ts at startup.
  */
 export function startBridge(): void {
   if (httpServer) {
-    console.warn('[Figma Bridge] Already running');
+    console.error('[Figma Bridge] Already running');
     return;
   }
 
@@ -109,16 +123,14 @@ export function startBridge(): void {
 
   httpServer = app.listen(PORT, HOST, () => {
     bridgeStatus = 'running';
-    onStatusChange?.(bridgeStatus);
-    console.log(`[Figma Bridge] Listening on ${HOST}:${PORT}`);
+    console.error(`[Figma Bridge] Listening on ${HOST}:${PORT}`);
   });
 
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
     bridgeStatus = 'error';
-    onStatusChange?.(bridgeStatus);
     httpServer = undefined;
     if (err.code === 'EADDRINUSE') {
-      console.warn(`[Figma Bridge] Port ${PORT} already in use — bridge unavailable`);
+      console.error(`[Figma Bridge] Port ${PORT} already in use — bridge unavailable`);
     } else {
       console.error('[Figma Bridge] Server error:', err.message);
     }
@@ -127,13 +139,11 @@ export function startBridge(): void {
 
 /**
  * Stop the HTTP bridge.
- * Called from extension.ts deactivate().
  */
 export function stopBridge(): void {
   httpServer?.close(() => {
-    console.log('[Figma Bridge] Stopped');
+    console.error('[Figma Bridge] Stopped');
   });
   httpServer = undefined;
   bridgeStatus = 'stopped';
-  onStatusChange?.(bridgeStatus);
 }
