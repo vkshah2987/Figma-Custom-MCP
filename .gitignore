@@ -32,9 +32,7 @@ yarn-error.log*
 
 # ── Editor ───────────────────────────────────────────────────────────────────
 .idea/
-.vscode/settings.json
-.vscode/*.code-workspace
-# launch.json and mcp.json are intentionally tracked
+.vscode/
 
 # ── Test coverage ─────────────────────────────────────────────────────────────
 coverage/
