@@ -1,0 +1,38 @@
+{
+  "name": "@figma-mcp/server",
+  "displayName": "Figma MCP Bridge",
+  "description": "A standalone MCP server that bridges Figma design selections to any AI client (VS Code Copilot, Claude Desktop, Cursor, etc.).",
+  "version": "2.0.0",
+  "license": "MIT",
+  "bin": {
+    "figma-mcp-bridge": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "keywords": [
+    "figma",
+    "mcp",
+    "model-context-protocol",
+    "copilot",
+    "claude",
+    "design-to-code"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "npx ts-node src/index.ts",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "express": "^4.21.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

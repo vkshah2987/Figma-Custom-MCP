@@ -1,0 +1,14 @@
+{
+  "name": "@figma-mcp/plugin",
+  "version": "1.0.0",
+  "description": "Figma desktop plugin that pushes the current selection to the local MCP bridge.",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.98.0",
+    "typescript": "^5.7.3"
+  }
+}

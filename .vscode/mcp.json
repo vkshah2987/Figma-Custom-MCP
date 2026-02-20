@@ -3,7 +3,7 @@
     "figma-mcp-bridge": {
       "type": "stdio",
       "command": "node",
-      "args": ["${workspaceFolder}/dist/index.js"]
+      "args": ["${workspaceFolder}/packages/mcp-server/dist/index.js"]
     }
   }
 }
