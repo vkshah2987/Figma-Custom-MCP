@@ -29,6 +29,8 @@ export interface DesignPaint {
   opacity: number;       // 0–1
   color?: DesignColor;   // For SOLID fills
   gradientStops?: Array<{ color: DesignColor; position: number }>;
+  imageRef?: string;     // IMAGE fills — hash referencing an image asset by ID
+  scaleMode?: string;    // IMAGE fills — FILL | FIT | CROP | TILE
 }
 
 export interface DesignEffect {
@@ -114,6 +116,29 @@ export interface DesignNode {
   children?: DesignNode[];
 }
 
+// ─── Image assets (individual images extracted from the design) ────────────
+
+export interface ImageAsset {
+  /** Unique ID — imageHash for raster fills, nodeId for vector exports */
+  id: string;
+  /** Image format */
+  format: 'png' | 'jpg' | 'svg' | 'gif' | 'webp';
+  /** Base64-encoded image data (raster or SVG) */
+  data: string;
+  /** Node that contains/produces this image */
+  nodeId: string;
+  /** Human-readable name of the source node */
+  nodeName: string;
+  /** Original width */
+  width: number;
+  /** Original height */
+  height: number;
+  /** What kind of asset this is */
+  assetType: 'image-fill' | 'vector';
+  /** Absolute path to the file on disk (set after writing to storage) */
+  filePath?: string;
+}
+
 // ─── State / payload ───────────────────────────────────────────────────────
 
 export interface SelectionState {
@@ -129,6 +154,8 @@ export interface SelectionState {
   metadata: NodeMetadata;
   /** Full design tree for webpage generation (optional — requires enhanced plugin) */
   designTree?: DesignNode;
+  /** Individual image assets extracted from the design (keyed by asset ID) */
+  images?: Record<string, ImageAsset>;
   /** Unix timestamp (ms) when this selection was stored */
   timestamp: number;
 }
@@ -141,4 +168,10 @@ export interface SelectionPayload {
   userId: string;
   metadata: NodeMetadata;
   designTree?: DesignNode;
+}
+
+/** Batch of image assets from the plugin via POST /selection/images */
+export interface ImageBatchPayload {
+  nodeId: string;
+  assets: ImageAsset[];
 }

@@ -1,5 +1,5 @@
 {
-  "name": "figma-mcp-monorepo",
+  "name": "figma-custom-mcp",
   "private": true,
   "workspaces": [
     "packages/*"

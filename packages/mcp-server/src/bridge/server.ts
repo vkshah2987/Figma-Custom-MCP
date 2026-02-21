@@ -1,7 +1,9 @@
 import express, { Request, Response, NextFunction } from 'express';
 import * as http from 'http';
+import * as path from 'path';
 import { selectionStore } from '../store/selectionStore';
-import { SelectionPayload } from '../types/selection';
+import { getAssetsDir } from '../store/imageStorage';
+import { SelectionPayload, ImageBatchPayload, ImageAsset } from '../types/selection';
 
 const PORT = parseInt(process.env.BRIDGE_PORT || '3050', 10);
 const HOST = '0.0.0.0'; // bind all interfaces — handles both 127.0.0.1 and ::1 (IPv6 localhost)
@@ -11,35 +13,56 @@ let bridgeStatus: 'stopped' | 'running' | 'error' = 'stopped';
 
 export function getBridgeStatus(): typeof bridgeStatus { return bridgeStatus; }
 
+/** Serve an image asset from the in-memory base64 data (fallback when file is missing). */
+function serveFromMemory(asset: ImageAsset, res: Response): void {
+  if (asset.format === 'svg') {
+    const svgText = Buffer.from(asset.data, 'base64').toString('utf-8');
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.send(svgText);
+  } else {
+    const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+    const buffer = Buffer.from(asset.data, 'base64');
+    res.setHeader('Content-Type', mimeMap[asset.format] || 'image/png');
+    res.setHeader('Content-Length', buffer.length.toString());
+    res.send(buffer);
+  }
+}
+
+function setCorsHeaders(req: Request, res: Response): void {
+  const origin = req.headers.origin ?? '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (origin !== '*') {
+    res.setHeader('Vary', 'Origin');
+  }
+}
+
 function createApp(): express.Application {
   const app = express();
 
-  // Parse JSON bodies — 10 MB limit to handle large Figma design trees
-  app.use(express.json({ limit: '10mb' }));
-
-  // CORS — Figma plugin UI iframe sends Origin: null (sandboxed context).
-  // Reflecting the origin header back (instead of using '*') is the only way
-  // to satisfy browsers when origin is 'null'.
-  app.use((_req: Request, res: Response, next: NextFunction) => {
-    const origin = _req.headers.origin ?? '*';
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    if (origin !== '*') {
-      res.setHeader('Vary', 'Origin');
-    }
+  // CORS MUST run before body parsing — otherwise a 413/400 from the JSON
+  // parser will lack CORS headers and the browser will hide the real error.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    setCorsHeaders(req, res);
     next();
   });
 
-  // Handle CORS pre-flight
+  // Handle CORS pre-flight (before body parser touches the stream)
   app.options('*', (_req: Request, res: Response) => {
     res.sendStatus(204);
   });
 
+  // Parse JSON bodies — 50 MB limit to handle base64 image batches
+  app.use(express.json({ limit: '50mb' }));
+
+  // ── Static serving of figma-assets/ ─────────────────────────────────────────
+  // Exposes stored image files at /figma-assets/<filename>
+  app.use('/figma-assets', express.static(getAssetsDir()));
+
   // ── POST /selection ─────────────────────────────────────────────────────────
-  // Figma plugin pushes the selected node here.
+  // Figma plugin pushes the selected node here (design tree, no image data).
   app.post('/selection', (req: Request, res: Response): void => {
-    // req.body is undefined when Content-Type is missing or body parsing failed
     const body = (req.body || {}) as Partial<SelectionPayload>;
     const { fileId, nodeId, pageId, userId, metadata, designTree } = body;
 
@@ -58,20 +81,82 @@ function createApp(): express.Application {
       userId: userId || 'anonymous',
       metadata,
       designTree,
+      images: {},
       timestamp: Date.now(),
     });
     res.json({ ok: true });
   });
 
+  // ── POST /selection/images ────────────────────────────────────────────────
+  // Figma plugin pushes individual image assets (IMAGE fills + vector SVGs).
+  app.post('/selection/images', (req: Request, res: Response): void => {
+    const body = (req.body || {}) as Partial<ImageBatchPayload>;
+    const { nodeId, assets } = body;
+
+    if (!nodeId || !assets || !Array.isArray(assets)) {
+      res.status(400).json({ error: 'Invalid payload. Required: nodeId, assets[]' });
+      return;
+    }
+
+    const ok = selectionStore.setImages(nodeId, assets);
+    if (!ok) {
+      res.status(409).json({ error: 'Selection changed; images discarded' });
+      return;
+    }
+
+    console.error(`[Figma Bridge] ${assets.length} image asset(s) saved to disk for node ${nodeId}`);
+    console.error(`[Figma Bridge] Assets dir: ${getAssetsDir()}`);
+    res.json({ ok: true, count: assets.length, assetsDir: getAssetsDir() });
+  });
+
+  // ── GET /selection/images ─────────────────────────────────────────────────
+  // List all image assets (metadata only, no raw data).
+  app.get('/selection/images', (_req: Request, res: Response): void => {
+    const list = selectionStore.listImages();
+    res.json({ status: 'ok', count: list.length, assets: list });
+  });
+
+  // ── GET /selection/images/:id ─────────────────────────────────────────────
+  // Return a specific image asset by ID. Serves the file from disk if available.
+  app.get('/selection/images/:id', (req: Request, res: Response): void => {
+    const imageId = typeof req.params.id === 'string' ? req.params.id : String(req.params.id);
+    const asset = selectionStore.getImage(imageId);
+    if (!asset) {
+      res.status(404).json({ error: 'Image not found', id: imageId });
+      return;
+    }
+
+    // Prefer serving the file from disk.
+    if (asset.filePath) {
+      res.sendFile(asset.filePath, (err) => {
+        if (err) {
+          // Fallback to in-memory data if file is missing.
+          serveFromMemory(asset, res);
+        }
+      });
+      return;
+    }
+
+    serveFromMemory(asset, res);
+  });
+
   // ── GET /selection ───────────────────────────────────────────────────────────
-  // MCP tool (or anyone) reads the latest stored selection from here.
+  // MCP tool reads the latest stored selection (image raw data is stripped).
   app.get('/selection', (_req: Request, res: Response): void => {
     const current = selectionStore.get();
     if (!current) {
       res.status(404).json({ error: 'No active selection' });
       return;
     }
-    res.json({ status: 'ok', selection: current });
+    // Return selection with image metadata (no raw data)
+    const { images, ...rest } = current;
+    const imageSummary = selectionStore.listImages();
+    res.json({
+      status: 'ok',
+      selection: rest,
+      images: { count: imageSummary.length, assets: imageSummary },
+      assetsDir: getAssetsDir(),
+    });
   });
 
   // ── GET /health ──────────────────────────────────────────────────────────────
@@ -93,12 +178,10 @@ function createApp(): express.Application {
 
   // ── Error handler ────────────────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction): void => {
+  app.use((err: any, req: Request, res: Response, _next: NextFunction): void => {
     console.error('[Figma Bridge] Unhandled error:', err.message);
-    // Propagate the correct status code:
-    //   PayloadTooLargeError (body > limit) → 413
-    //   SyntaxError (malformed JSON)        → 400
-    //   everything else                     → 500
+    // Ensure CORS headers are present even on error responses.
+    setCorsHeaders(req, res);
     const status: number =
       err.status ?? err.statusCode ??
       (err.type === 'entity.too.large' ? 413 :

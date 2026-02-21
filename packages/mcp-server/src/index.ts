@@ -16,7 +16,10 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
 import { startBridge, stopBridge } from './bridge/server';
+import { selectionStore } from './store/selectionStore';
+import { getAssetsDir } from './store/imageStorage';
 
 const BRIDGE_URL = `http://localhost:${process.env.BRIDGE_PORT ?? 3050}`;
 
@@ -35,10 +38,8 @@ const mcp = new McpServer({
 
 mcp.tool(
   'get_current_figma_selection',
-  'Returns the full design tree and metadata for the node currently selected in the Figma desktop plugin. The plugin must be running and a node must be selected.',
-  {
-    // No required input — the tool reads from the in-memory store
-  },
+  'Returns the full design tree, metadata, and a list of available image assets (with file paths on disk) for the node currently selected in Figma. IMAGE fills in the design tree have an "imageRef" field matching an image asset ID. Vector nodes (VECTOR, STAR, LINE, POLYGON) are exported as SVG with their node ID as the asset ID. Each image asset includes a "filePath" — the absolute path to the real file on disk (.png, .jpg, .svg, etc.) that you can copy into the user\'s project or reference directly. Use get_figma_selection_image with a specific ID for more details.',
+  {},
   async () => {
     try {
       const res = await fetch(`${BRIDGE_URL}/selection`);
@@ -88,6 +89,86 @@ mcp.tool(
   },
 );
 
+// ── Tool: get_figma_selection_image ───────────────────────────────────────
+
+mcp.tool(
+  'get_figma_selection_image',
+  'Returns a specific image asset from the current Figma selection by its ID, including the absolute file path on disk. For IMAGE fills, the ID is the imageRef/imageHash from the design tree. For vector nodes (icons/shapes), the ID is the Figma node ID. The filePath field points to the actual image file (.png/.jpg/.svg) on disk — copy or reference it directly in generated HTML/CSS.',
+  {
+    imageId: z.string().describe('The image asset ID — use imageRef from the design tree fills (for image fills) or the node ID (for vectors). Call get_current_figma_selection first to see all available image IDs.'),
+  },
+  async ({ imageId }) => {
+    const asset = selectionStore.getImage(imageId);
+    if (!asset) {
+      const available = selectionStore.listImages();
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            status: 'not_found',
+            imageId,
+            availableImages: available.map(a => ({ id: a.id, name: a.nodeName, format: a.format, type: a.assetType, filePath: a.filePath })),
+            message: available.length
+              ? `Image "${imageId}" not found. ${available.length} image(s) available — see availableImages.`
+              : 'No images available. Select a node with image fills or vectors in Figma.',
+          }, null, 2),
+        }],
+      };
+    }
+
+    if (asset.format === 'svg') {
+      const svgText = Buffer.from(asset.data, 'base64').toString('utf-8');
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              status: 'ok',
+              imageId: asset.id,
+              format: 'svg',
+              assetType: asset.assetType,
+              nodeName: asset.nodeName,
+              nodeId: asset.nodeId,
+              width: asset.width,
+              height: asset.height,
+              filePath: asset.filePath,
+              usage: `Copy ${asset.filePath} into your project assets, or embed the SVG markup directly.`,
+            }),
+          },
+          { type: 'text' as const, text: svgText },
+        ],
+      };
+    }
+
+    // Raster image (png, jpg, gif, webp)
+    const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify({
+            status: 'ok',
+            imageId: asset.id,
+            format: asset.format,
+            assetType: asset.assetType,
+            nodeName: asset.nodeName,
+            nodeId: asset.nodeId,
+            width: asset.width,
+            height: asset.height,
+            filePath: asset.filePath,
+            usage: `Copy ${asset.filePath} into your project assets folder and reference: <img src="assets/${asset.id}.${asset.format}" alt="${asset.nodeName}" width="${asset.width}" height="${asset.height}">`,
+          }),
+        },
+        {
+          type: 'image' as const,
+          data: asset.data,
+          mimeType: mimeMap[asset.format] || 'image/png',
+        },
+      ],
+    };
+  },
+);
+
 // ── Tool: get_bridge_health ────────────────────────────────────────────────
 
 mcp.tool(
@@ -118,7 +199,7 @@ mcp.tool(
 
 mcp.resource(
   'figma://selection',
-  'The current Figma selection as a JSON design tree',
+  'The current Figma selection as a JSON design tree with image asset references',
   async () => {
     try {
       const res = await fetch(`${BRIDGE_URL}/selection`);
@@ -167,10 +248,12 @@ main().catch((err) => {
 // ── Graceful shutdown ──────────────────────────────────────────────────────
 
 process.on('SIGINT', () => {
+  selectionStore.clear(); // clean up disk assets
   stopBridge();
   process.exit(0);
 });
 process.on('SIGTERM', () => {
+  selectionStore.clear(); // clean up disk assets
   stopBridge();
   process.exit(0);
 });

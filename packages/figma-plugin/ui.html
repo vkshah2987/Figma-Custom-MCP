@@ -263,6 +263,49 @@
       });
     }
 
+    var CHUNK_SIZE = 5;        // images per batch
+    var CHUNK_TIMEOUT_MS = 15000; // per-batch fetch timeout
+
+    function pushImageBatch(nodeId, batch) {
+      return fetch(serverUrl + '/selection/images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeId: nodeId, assets: batch }),
+        signal: AbortSignal.timeout(CHUNK_TIMEOUT_MS)
+      }).then(function(res) {
+        if (res.status === 409) { return false; } // selection changed — stop quietly
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return true;
+      });
+    }
+
+    function pushImages(nodeId, assets) {
+      var total = assets.length;
+      var chunks = [];
+      for (var i = 0; i < total; i += CHUNK_SIZE) {
+        chunks.push(assets.slice(i, i + CHUNK_SIZE));
+      }
+      var sent = 0;
+
+      // Send chunks sequentially so we don't blow up the payload
+      function sendNext(idx) {
+        if (idx >= chunks.length) {
+          var fills = assets.filter(function(a) { return a.assetType === 'image-fill'; }).length;
+          var vecs  = assets.filter(function(a) { return a.assetType === 'vector'; }).length;
+          addLog('\u2713 ' + sent + '/' + total + ' image(s) synced (' + fills + ' fills, ' + vecs + ' vectors)');
+          return;
+        }
+        pushImageBatch(nodeId, chunks[idx]).then(function(ok) {
+          if (ok === false) { addLog('\u2717 Images discarded (selection changed)', 'err'); return; }
+          sent += chunks[idx].length;
+          sendNext(idx + 1);
+        }).catch(function(err) {
+          addLog('\u2717 Images push failed: ' + err.message, 'err');
+        });
+      }
+      sendNext(0);
+    }
+
     function showSelection(data) {
       setupCard.style.display = 'none';
       emptyState.style.display = 'none';
@@ -309,6 +352,9 @@
           + '<span style="color:var(--muted);font-family:var(--mono);font-size:10px;">' + names
           + (msg.count > 4 ? ' +' + (msg.count - 4) + ' more' : '') + '</span>';
         addLog('Multi-select: ' + msg.count + ' nodes', 'err');
+      } else if (msg.type === 'images-extracted') {
+        addLog(msg.assets.length + ' image(s) extracted \u2014 pushing\u2026', 'inf');
+        pushImages(msg.nodeId, msg.assets);
       }
     };
 
